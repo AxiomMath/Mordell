@@ -1,0 +1,299 @@
+module
+public import Mathlib
+public import Mordell.Attr
+
+/-!
+# Normalising a linear form over a number field
+
+Let `K` be a number field. There is a constant `C ≥ 1`, depending only on `K`, such that every
+nonzero vector `a ∈ K^ι` (`ι` finite) can be rescaled by some `λ ∈ Kˣ` so that all coordinates
+`λ a_j` are algebraic integers whose houses are at most `C · exp(h(a))`, where `h(a)` is the
+absolute logarithmic (projective) height of `a`. The proof uses the finiteness of the class group
+to make the coordinates integral generating an ideal of bounded norm, and Dirichlet's unit theorem
+to balance the archimedean sizes.
+
+In detail, following Bombieri: Minkowski's bound rescales `a` to an integral vector `b` whose
+coordinates generate an ideal containing a positive integer `m ≤ B`, with `B` depending only on
+`K`. At every finite place `v` this gives `|m|_v ≤ max_j |b_j|_v`, so the finite part of the height
+of `b` is at least `m ^ (-[K : ℚ])`, and the archimedean part `T` of `h(a)` satisfies
+`T ≤ h(a) + log B`. The logarithmic unit lattice has bounded covering radius `R` in the trace-zero
+hyperplane, so a unit `ε` moves `(log max_j |b_j|_w - T)_w` to within `R` of `0`; then `ε` times
+the rescaling works with `C = (B + 1) e^R`.
+
+## Main results
+
+* `Faltings.exists_isIntegral_smul_house_le`: the normalisation of a linear form.
+
+## Implementation notes
+
+Mathlib's `Height.logHeight` on a number field is the relative height
+`∑_{v | ∞} n_v log max_j ‖a_j‖_v + ∑ᶠ_{v ∤ ∞} log max_j ‖a_j‖_v` (`NumberField.mulHeight_eq`);
+Bombieri's absolute height is this divided by `[K : ℚ]`, so `exp(h(a))` is written
+`Real.exp (Height.logHeight a / Module.finrank ℚ K)`. Membership `λ a_j ∈ 𝓞 K` is written
+`IsIntegral ℤ (λ * a j)` (`NumberField.mem_ringOfIntegers`). The constant is uniform in the
+finite index type `ι`, not only in `N` for `ι = Fin N`.
+
+## References
+
+* [E. Bombieri, *The Mordell conjecture revisited*][bombieri1990], Section 8
+-/
+
+namespace Faltings
+
+universe u
+
+open NumberField NumberField.InfinitePlace NumberField.Units
+  NumberField.Units.dirichletUnitTheorem
+
+/-- A real family on a finite type that sums to `0` and is bounded by `R` in absolute value off
+one point is bounded by `card α * R` in absolute value everywhere. -/
+private lemma abs_le_card_mul_of_sum_eq_zero {α : Type*} [Fintype α] {e : α → ℝ}
+    (he : ∑ w, e w = 0) {w₀ : α} {R : ℝ} (hR : 0 ≤ R) (h : ∀ w, w ≠ w₀ → |e w| ≤ R) (w : α) :
+    |e w| ≤ Fintype.card α * R := by
+  classical
+  by_cases hw : w = w₀
+  · rw [hw]
+    have h1 := Finset.add_sum_erase Finset.univ e (Finset.mem_univ w₀)
+    rw [he] at h1
+    rw [show e w₀ = -∑ w ∈ Finset.univ.erase w₀, e w by linarith, abs_neg]
+    refine (Finset.abs_sum_le_sum_abs _ _).trans ?_
+    refine (Finset.sum_le_card_nsmul _ _ R fun w hw' => h w (Finset.ne_of_mem_erase hw')).trans ?_
+    rw [nsmul_eq_mul]
+    exact mul_le_mul_of_nonneg_right
+      (by exact_mod_cast (Finset.card_erase_le).trans (Finset.card_univ).le) hR
+  · refine (h w hw).trans ?_
+    have : (1 : ℝ) ≤ Fintype.card α := by exact_mod_cast Fintype.card_pos_iff.2 ⟨w⟩
+    nlinarith
+
+/-- Dirichlet's unit theorem in the form used here: the logarithmic unit lattice has bounded
+covering radius in the trace-zero hyperplane `∑_w n_w y_w = 0`. -/
+private lemma exists_unit_log_near (K : Type*) [Field K] [NumberField K] :
+    ∃ R : ℝ, 0 ≤ R ∧ ∀ y : InfinitePlace K → ℝ, ∑ w, (w.mult : ℝ) * y w = 0 →
+      ∃ u : (𝓞 K)ˣ, ∀ w, |Real.log (w (u : K)) + y w| ≤ R := by
+  classical
+  let B := (basisUnitLattice K).ofZLatticeBasis ℝ (unitLattice K)
+  let R0 := ∑ i, ‖B i‖
+  have hR0 : 0 ≤ R0 := Finset.sum_nonneg fun _ _ => norm_nonneg _
+  refine ⟨Fintype.card (InfinitePlace K) * R0, by positivity, fun y hy => ?_⟩
+  let z : logSpace K := fun w => -(w.1.mult : ℝ) * y w.1
+  obtain ⟨u, -, hu⟩ : (ZSpan.floor B z : logSpace K) ∈ unitLattice K := by
+    rw [← Module.Basis.ofZLatticeBasis_span ℝ (unitLattice K)]
+    exact (ZSpan.floor B z).2
+  let e : InfinitePlace K → ℝ := fun w =>
+    w.mult * (Real.log (w ((Additive.toMul u : (𝓞 K)ˣ) : K)) + y w)
+  have he_sum : ∑ w, e w = 0 := by
+    simp only [e, mul_add, Finset.sum_add_distrib, sum_mult_mul_log, hy, add_zero]
+  have he_ne : ∀ w (hw : w ≠ w₀), |e w| ≤ R0 := by
+    intro w hw
+    have : e w = -(ZSpan.fract B z) ⟨w, hw⟩ := by
+      rw [ZSpan.fract_apply, ← hu]
+      simp [e, z, logEmbedding]
+      ring
+    rw [this, abs_neg]
+    exact (norm_le_pi_norm (ZSpan.fract B z) ⟨w, hw⟩).trans (ZSpan.norm_fract_le B z)
+  refine ⟨Additive.toMul u, fun w => ?_⟩
+  refine le_trans ?_ (abs_le_card_mul_of_sum_eq_zero he_sum hR0 he_ne w)
+  simp only [e, abs_mul]
+  have h1 : (1 : ℝ) ≤ |(w.mult : ℝ)| := by
+    rw [Nat.abs_cast]
+    exact one_le_mult
+  nlinarith [abs_nonneg (Real.log (w ((Additive.toMul u : (𝓞 K)ˣ) : K)) + y w)]
+
+open scoped nonZeroDivisors in
+/-- Finiteness of the class group, in the form used here: every nonzero `a : ι → K` can be
+rescaled into `𝓞 K` so that the ideal generated by the coordinates contains a positive integer
+bounded in terms of `K` only. -/
+private lemma exists_smul_integral_mem_span (K : Type*) [Field K] [NumberField K] :
+    ∃ B : ℕ, ∀ {ι : Type*} [Finite ι] (a : ι → K), a ≠ 0 →
+      ∃ c₀ : K, c₀ ≠ 0 ∧ ∃ b : ι → 𝓞 K, (∀ j, (b j : K) = c₀ * a j) ∧
+        ∃ m : ℕ, 0 < m ∧ m ≤ B ∧ (m : 𝓞 K) ∈ Ideal.span (Set.range b) := by
+  classical
+  obtain ⟨Mk, hMk⟩ : ∃ Mk : ℝ, ∀ C : ClassGroup (𝓞 K),
+      ∃ I : (Ideal (𝓞 K))⁰, ClassGroup.mk0 I = C ∧ (Ideal.absNorm (I : Ideal (𝓞 K)) : ℝ) ≤ Mk :=
+    ⟨_, exists_ideal_in_class_of_norm_le⟩
+  refine ⟨⌊Mk⌋₊, fun {ι} _ a ha => ?_⟩
+  obtain ⟨d, hd⟩ := IsLocalization.exist_integer_multiples_of_finite (𝓞 K)⁰ a
+  choose a₀ ha₀ using fun j => RingHom.mem_rangeS.mp (hd j)
+  have hd0 : ((d : 𝓞 K) : K) ≠ 0 := by simp
+  have hJ0 : Ideal.span (Set.range a₀) ≠ ⊥ := by
+    obtain ⟨j, hj⟩ := Function.ne_iff.mp ha
+    rw [Ne, Ideal.span_eq_bot]
+    intro h
+    have h0 := h (a₀ j) ⟨j, rfl⟩
+    have := ha₀ j
+    rw [h0, map_zero, Algebra.smul_def] at this
+    exact hj ((mul_eq_zero.mp this.symm).resolve_left (by simp))
+  let J₀ : (Ideal (𝓞 K))⁰ := ⟨_, mem_nonZeroDivisors_of_ne_zero hJ0⟩
+  obtain ⟨I, hI, hIn⟩ := hMk (ClassGroup.mk0 J₀)
+  obtain ⟨x, y, hx, hy, hxy⟩ := ClassGroup.mk0_eq_mk0_iff.mp hI
+  have hmem : ∀ j, ∃ z ∈ (I : Ideal (𝓞 K)), x * z = y * a₀ j := fun j =>
+    Ideal.mem_span_singleton_mul.mp (hxy ▸ Ideal.mul_mem_mul (Ideal.mem_span_singleton_self y)
+      (Ideal.subset_span ⟨j, rfl⟩))
+  choose b hbI hb using hmem
+  have hxK : (x : K) ≠ 0 := by simpa using hx
+  refine ⟨(d : 𝓞 K) * y / x, ?_, b, fun j => ?_, ?_⟩
+  · have hyK : (y : K) ≠ 0 := by simpa using hy
+    exact div_ne_zero (mul_ne_zero hd0 hyK) hxK
+  · have h1 := congrArg (algebraMap (𝓞 K) K) (hb j)
+    have h2 := ha₀ j
+    simp only [map_mul, Algebra.smul_def] at h1 h2
+    simp only [← RingOfIntegers.coe_eq_algebraMap] at h1 h2
+    rw [div_mul_eq_mul_div, eq_div_iff hxK]
+    linear_combination h1 + (y : K) * h2
+  · have hspan : Ideal.span (Set.range b) = I := by
+      apply mul_left_cancel₀ (a := Ideal.span {x}) (by simpa using hx)
+      rw [hxy, Ideal.span_mul_span, Ideal.span_mul_span]
+      congr 1
+      ext t
+      simp only [Set.singleton_mul, Set.mem_image, Set.mem_range]
+      constructor
+      · rintro ⟨_, ⟨j, rfl⟩, rfl⟩
+        exact ⟨_, ⟨j, rfl⟩, (hb j).symm⟩
+      · rintro ⟨_, ⟨j, rfl⟩, rfl⟩
+        exact ⟨_, ⟨j, rfl⟩, hb j⟩
+    refine ⟨Ideal.absNorm (I : Ideal (𝓞 K)), Nat.pos_of_ne_zero
+      (Ideal.absNorm_ne_zero_of_nonZeroDivisors I), Nat.le_floor hIn, ?_⟩
+    rw [hspan]
+    exact Ideal.absNorm_mem _
+
+/-- An algebraic integer has absolute value at most `1` at every finite place. -/
+private lemma finitePlace_coe_le_one {K : Type*} [Field K] [NumberField K] (v : FinitePlace K)
+    (r : 𝓞 K) : v (r : K) ≤ 1 :=
+  FinitePlace.norm_embedding_eq v (r : K) ▸ FinitePlace.norm_le_one K v.maximalIdeal r
+
+/-- At a finite place, an element of the ideal generated by `b` is no larger than the largest
+coordinate of `b`. -/
+private lemma finitePlace_le_iSup_of_mem_span {K : Type*} [Field K] [NumberField K] {ι : Type*}
+    [Finite ι] [Nonempty ι] (b : ι → 𝓞 K) {t : 𝓞 K} (ht : t ∈ Ideal.span (Set.range b))
+    (v : FinitePlace K) : v (t : K) ≤ ⨆ j, v (b j : K) := by
+  induction ht using Submodule.span_induction with
+  | mem x hx =>
+    obtain ⟨j, rfl⟩ := hx
+    exact le_ciSup (f := fun j => v (b j : K)) (Set.finite_range _).bddAbove j
+  | zero =>
+    calc v ((0 : 𝓞 K) : K) = 0 := by simp
+      _ ≤ _ := Real.iSup_nonneg fun j => (v.1.nonneg ((b j : 𝓞 K) : K))
+  | add x y _ _ hx hy =>
+    push_cast
+    exact (FinitePlace.add_le v _ _).trans (max_le hx hy)
+  | smul r x _ hx =>
+    rw [smul_eq_mul]
+    push_cast
+    rw [map_mul]
+    exact (mul_le_of_le_one_left (apply_nonneg v _) (finitePlace_coe_le_one v r)).trans hx
+
+/-- The finite part of the height of an integral vector whose coordinates generate an ideal
+containing the positive integer `m` is at least `m ^ (-[K : ℚ])`. -/
+private lemma inv_pow_le_finprod_iSup {K : Type*} [Field K] [NumberField K] {ι : Type*}
+    [Finite ι] [Nonempty ι] (b : ι → 𝓞 K) {m : ℕ} (hm : 0 < m)
+    (hmem : (m : 𝓞 K) ∈ Ideal.span (Set.range b)) :
+    ((m : ℝ) ^ Module.finrank ℚ K)⁻¹ ≤ ∏ᶠ v : FinitePlace K, ⨆ j, v (b j : K) := by
+  have hm0 : (m : K) ≠ 0 := by exact_mod_cast hm.ne'
+  have hfin : (Function.mulSupport fun v : FinitePlace K => v (m : K)).Finite :=
+    FinitePlace.hasFiniteMulSupport hm0
+  have hprod : ∏ᶠ v : FinitePlace K, v (m : K) = ((m : ℝ) ^ Module.finrank ℚ K)⁻¹ := by
+    rw [FinitePlace.prod_eq_inv_abs_norm hm0]
+    have : (m : K) = algebraMap ℚ K m := by simp
+    rw [this, Algebra.norm_algebraMap]
+    push_cast
+    rw [abs_of_nonneg (by positivity)]
+  have hle : ∀ v : FinitePlace K, v (m : K) ≤ ⨆ j, v (b j : K) := fun v => by
+    simpa using finitePlace_le_iSup_of_mem_span b hmem v
+  have hsub : Function.mulSupport (fun v : FinitePlace K => ⨆ j, v (b j : K)) ⊆
+      hfin.toFinset := by
+    intro v hv
+    rw [Set.Finite.coe_toFinset, Function.mem_mulSupport]
+    intro h1
+    apply hv
+    refine le_antisymm (ciSup_le fun j => finitePlace_coe_le_one v (b j)) ?_
+    exact h1 ▸ hle v
+  rw [← hprod, finprod_eq_prod_of_mulSupport_subset _ hsub,
+    finprod_eq_prod_of_mulSupport_subset _ (by rw [Set.Finite.coe_toFinset hfin])]
+  exact Finset.prod_le_prod₀ (fun v _ => apply_nonneg v _) fun v _ => hle v
+
+/-- The house is bounded by any common bound for the absolute values of the conjugates. -/
+private lemma house_le_of_forall_norm_le {K : Type*} [Field K] [NumberField K] {α : K} {r : ℝ}
+    (hr : 0 ≤ r) (h : ∀ σ : K →+* ℂ, ‖σ α‖ ≤ r) : NumberField.house α ≤ r := by
+  lift r to NNReal using hr
+  rw [house_eq_sup', NNReal.coe_le_coe, Finset.sup'_le_iff]
+  intro σ _
+  rw [← NNReal.coe_le_coe, coe_nnnorm]
+  exact h σ
+
+/-- At an infinite place, the largest coordinate of a nonzero vector is positive. -/
+private lemma infinitePlace_iSup_pos {K : Type*} [Field K] [NumberField K] {ι : Type*}
+    [Finite ι] (w : InfinitePlace K) {f : ι → K} (hf : f ≠ 0) : 0 < ⨆ j, w (f j) := by
+  obtain ⟨j, hj⟩ := Function.ne_iff.mp hf
+  exact (w.pos_iff.mpr hj).trans_le
+    (le_ciSup (f := fun j => w (f j)) (Set.finite_range _).bddAbove j)
+
+/-- The archimedean part of the height of an integral multiple `b = c₀ • a` whose coordinates
+generate an ideal containing the positive integer `m` exceeds `h(a)` by at most
+`[K : ℚ] log m`. -/
+private lemma sum_mult_log_iSup_le {K : Type*} [Field K] [NumberField K] {ι : Type*} [Finite ι]
+    {a : ι → K} (ha : a ≠ 0) {c₀ : K} (hc₀ : c₀ ≠ 0) (b : ι → 𝓞 K)
+    (hb : ∀ j, (b j : K) = c₀ * a j) {m : ℕ} (hm : 0 < m)
+    (hmem : (m : 𝓞 K) ∈ Ideal.span (Set.range b)) :
+    ∑ w : InfinitePlace K, (w.mult : ℝ) * Real.log (⨆ j, w (b j : K)) ≤
+      Height.logHeight a + Module.finrank ℚ K * Real.log m := by
+  have hb' : (fun j => (b j : K)) = c₀ • a := funext hb
+  have h0 : (fun j => (b j : K)) ≠ 0 := hb' ▸ smul_ne_zero hc₀ ha
+  have : Nonempty ι := let ⟨j, _⟩ := Function.ne_iff.mp ha; ⟨j⟩
+  have hP := inv_pow_le_finprod_iSup b hm hmem
+  have hP0 : 0 < ((m : ℝ) ^ Module.finrank ℚ K)⁻¹ := by positivity
+  have hprod : 0 < ∏ w : InfinitePlace K, (⨆ j, w (b j : K)) ^ w.mult :=
+    Finset.prod_pos fun w _ => pow_pos (infinitePlace_iSup_pos w h0) _
+  rw [Height.logHeight_eq_log_mulHeight, ← Height.mulHeight_smul_eq_mulHeight a hc₀, ← hb',
+    NumberField.mulHeight_eq h0, Real.log_mul hprod.ne' (hP0.trans_le hP).ne',
+    Real.log_prod fun w _ => (pow_pos (infinitePlace_iSup_pos w h0) _).ne']
+  have := Real.log_le_log hP0 hP
+  rw [Real.log_inv, Real.log_pow] at this
+  simp only [Real.log_pow]
+  linarith
+
+/-- For a number field `K` there is `C ≥ 1` such that every nonzero `a : ι → K` (`ι` finite)
+admits `λ ≠ 0` with every `λ * a j` integral over `ℤ` and
+`house (λ * a j) ≤ C * exp (Height.logHeight a / [K : ℚ])`. -/
+@[faltings "lem_bvs_normalize_linear_form"]
+public theorem exists_isIntegral_smul_house_le (K : Type*) [Field K] [NumberField K] :
+    ∃ C : ℝ, 1 ≤ C ∧ ∀ {ι : Type u} [Finite ι] (a : ι → K), a ≠ 0 →
+      ∃ c : K, c ≠ 0 ∧ ∀ j, IsIntegral ℤ (c * a j) ∧
+        house (c * a j) ≤ C * Real.exp (Height.logHeight a / Module.finrank ℚ K) := by
+  obtain ⟨R, hR0, hR⟩ := exists_unit_log_near K
+  obtain ⟨B, hB⟩ := exists_smul_integral_mem_span K
+  have hD : (0 : ℝ) < Module.finrank ℚ K := by exact_mod_cast Module.finrank_pos
+  refine ⟨(B + 1) * Real.exp R, one_le_mul_of_one_le_of_one_le (by simp) (Real.one_le_exp hR0),
+    fun {ι} _ a ha => ?_⟩
+  obtain ⟨c₀, hc₀, b, hb, m, hm, hmB, hmem⟩ := hB a ha
+  have h0 : (fun j => (b j : K)) ≠ 0 := funext hb ▸ smul_ne_zero hc₀ ha
+  -- the archimedean sizes `M_w = max_j w(b_j)` of the integral vector `b = c₀ • a`
+  set M : InfinitePlace K → ℝ := fun w => ⨆ j, w (b j : K)
+  set T : ℝ := (∑ w, (w.mult : ℝ) * Real.log (M w)) / Module.finrank ℚ K with hT
+  have hTle : T ≤ Height.logHeight a / Module.finrank ℚ K + Real.log (B + 1) := by
+    have hlogm : Real.log m ≤ Real.log (B + 1) :=
+      Real.log_le_log (by exact_mod_cast hm) (by exact_mod_cast hmB.trans B.le_succ)
+    rw [hT, div_add' _ _ _ hD.ne', div_le_div_iff_of_pos_right hD]
+    nlinarith [sum_mult_log_iSup_le ha hc₀ b hb hm hmem]
+  obtain ⟨u, hu⟩ := hR (fun w => Real.log (M w) - T) (by
+    simp only [mul_sub, Finset.sum_sub_distrib, ← Finset.sum_mul]
+    rw [show ∑ w : InfinitePlace K, (w.mult : ℝ) = Module.finrank ℚ K by
+      exact_mod_cast sum_mult_eq, hT, mul_div_cancel₀ _ hD.ne', sub_self])
+  refine ⟨(u : K) * c₀, mul_ne_zero (by simp) hc₀, fun j => ⟨?_, ?_⟩⟩
+  · rw [mul_assoc, ← hb j]
+    exact_mod_cast (u * b j : 𝓞 K).isIntegral_coe
+  · rw [mul_assoc, ← hb j]
+    refine house_le_of_forall_norm_le (by positivity) fun σ => ?_
+    set w := InfinitePlace.mk σ
+    rw [← InfinitePlace.apply, map_mul]
+    calc w (u : K) * w (b j : K) ≤ w (u : K) * M w :=
+          mul_le_mul_of_nonneg_left (le_ciSup (f := fun j => w (b j : K))
+            (Set.finite_range _).bddAbove j) (apply_nonneg _ _)
+      _ = Real.exp (Real.log (w (u : K)) + Real.log (M w)) := by
+          rw [Real.exp_add, Real.exp_log (w.pos_iff.mpr (by simp)),
+            Real.exp_log (infinitePlace_iSup_pos w h0)]
+      _ ≤ Real.exp (Real.log (B + 1) + R + Height.logHeight a / Module.finrank ℚ K) :=
+          Real.exp_le_exp.mpr (by linarith [(abs_le.mp (hu w)).2])
+      _ = (B + 1) * Real.exp R * Real.exp (Height.logHeight a / Module.finrank ℚ K) := by
+          rw [Real.exp_add, Real.exp_add, Real.exp_log (by positivity)]
+
+end Faltings

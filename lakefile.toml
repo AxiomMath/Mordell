@@ -1,0 +1,26 @@
+name = "Mordell"
+version = "0.1.0"
+defaultTargets = ["Mordell"]
+
+[leanOptions]
+pp.unicode.fun = true
+autoImplicit = false
+relaxedAutoImplicit = false
+maxSynthPendingDepth = 3
+weak.linter.mathlibStandardSet = true
+
+# Same Mathlib commit as the Stacks project (and `lean-toolchain`).
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "56a005855ea17e0b0958f73ec801ae140b0a1679"
+
+# The Stacks project in Lean; this formalization uses its `StacksFrontier` library.
+[[require]]
+name = "Stacks"
+git = "https://github.com/AxiomMath/Stacks"
+rev = "c496df0d9beea9deaeabcea8492605f9a0a2313b"
+
+[[lean_lib]]
+name = "Mordell"
+roots = ["Mordell"]
